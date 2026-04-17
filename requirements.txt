@@ -1,0 +1,7 @@
+pyTelegramBotAPI
+instaloader
+moviepy
+imageio-ffmpeg
+yt-dlp
+curl_cffi
+python-dotenv
