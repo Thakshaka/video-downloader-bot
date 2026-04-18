@@ -5,12 +5,25 @@ from .common import find_video_file
 
 # Initialize Instagram loader with minimal options
 loader = instaloader.Instaloader(
+    quiet=True,
     download_comments=False,
     download_geotags=False,
     download_pictures=False,
     download_video_thumbnails=False,
     save_metadata=False
 )
+
+_original_error = loader.context.error
+
+
+def _filtered_instaloader_error(msg, repeat_at_end=True):
+    # Ignore noisy non-fatal graphql retry messages that still succeed.
+    if "graphql/query: 403 Forbidden" in str(msg):
+        return
+    _original_error(msg, repeat_at_end=repeat_at_end)
+
+
+loader.context.error = _filtered_instaloader_error
 
 
 def is_instagram_url(url):
