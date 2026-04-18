@@ -29,18 +29,51 @@ if not BOT_TOKEN:
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
-# Global state for video and folder tracking
-video_file = None
-folder_name = None
+
+# Store one pending request per user until they choose audio or video.
+pending_requests = {}
 
 
-def send_video_with_audio_button(chat_id, video_path):
-    """Send video to user with a download audio button."""
+def send_video(chat_id, video_path):
     with open(video_path, "rb") as video:
-        markup = types.InlineKeyboardMarkup()
-        btn1 = types.InlineKeyboardButton("Download audio", callback_data="get_audio")
-        markup.add(btn1)
-        bot.send_video(chat_id, video, reply_markup=markup)
+        bot.send_video(chat_id, video)
+
+
+def send_audio(chat_id, video_path):
+    audio_name = f"{uuid.uuid4()}.mp3"
+    video = VideoFileClip(video_path)
+    audio = video.audio
+    audio.write_audiofile(audio_name)
+    video.close()
+
+    try:
+        with open(audio_name, "rb") as audio_file:
+            bot.send_audio(chat_id, audio_file)
+    finally:
+        if os.path.exists(audio_name):
+            os.remove(audio_name)
+
+
+def get_download_config(url):
+    if is_youtube_url(url):
+        return download_youtube_video, f"yt_{uuid.uuid4()}", "YouTube"
+
+    if is_pinterest_url(url):
+        return download_pinterest_video, f"pin_{uuid.uuid4()}", "Pinterest"
+
+    if is_tiktok_url(url):
+        return download_tiktok_video, f"tt_{uuid.uuid4()}", "TikTok"
+
+    if is_instagram_url(url):
+        try:
+            shortcode = url.split("/")[-2]
+            if not shortcode:
+                return None
+            return download_instagram_video, shortcode, "Instagram"
+        except IndexError:
+            return None
+
+    return None
 
 
 def safe_edit_status(chat_id, message_id, text):
@@ -53,59 +86,57 @@ def safe_edit_status(chat_id, message_id, text):
 
 @bot.message_handler(commands=['start'])
 def start(message):
-    bot.send_message(message.chat.id, "Hello! Send me a video link from YouTube, Instagram, TikTok, or Pinterest, and I'll download it for you. You can also download the audio separately!")
+    bot.send_message(
+        message.chat.id,
+        "Hello! Send me a video link from YouTube, Instagram, TikTok, or Pinterest. "
+        "I will ask whether you want video or audio."
+    )
 
 
 @bot.message_handler(func=lambda message: True)
 def handle_video_request(message):
-    """Handle video download requests for all supported platforms."""
-    global video_file, folder_name
+    """Handle incoming links and ask user for desired output format."""
     url = message.text.strip()
 
-    video_file = None
-    folder_name = None
-
-    # YouTube
-    if is_youtube_url(url):
-        folder_name = f"yt_{uuid.uuid4()}"
-        loader_message = bot.send_message(message.chat.id, "Downloading YouTube video...")
-        _download_and_send(message, loader_message, download_youtube_video, url, folder_name)
+    config = get_download_config(url)
+    if not config:
+        bot.reply_to(message, "Invalid link")
         return
 
-    # Pinterest
-    if is_pinterest_url(url):
-        folder_name = f"pin_{uuid.uuid4()}"
-        loader_message = bot.send_message(message.chat.id, "Downloading Pinterest video...")
-        _download_and_send(message, loader_message, download_pinterest_video, url, folder_name)
+    downloader_func, download_path, platform_name = config
+    pending_requests[message.from_user.id] = {
+        "url": url,
+        "downloader": downloader_func,
+        "download_path": download_path,
+        "platform": platform_name,
+    }
+
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("Video", callback_data="choose_video"),
+        types.InlineKeyboardButton("Audio", callback_data="choose_audio")
+    )
+    bot.send_message(
+        message.chat.id,
+        f"{platform_name} link detected. Choose what you want to download:",
+        reply_markup=markup,
+    )
+
+def _download_and_send(call, output_type):
+    request = pending_requests.pop(call.from_user.id, None)
+    if not request:
+        bot.send_message(call.message.chat.id, "Request expired. Please send the link again.")
         return
 
-    # TikTok
-    if is_tiktok_url(url):
-        folder_name = f"tt_{uuid.uuid4()}"
-        loader_message = bot.send_message(message.chat.id, "Downloading TikTok video...")
-        _download_and_send(message, loader_message, download_tiktok_video, url, folder_name)
-        return
+    downloader_func = request["downloader"]
+    url = request["url"]
+    download_path = request["download_path"]
+    platform_name = request["platform"]
 
-    # Instagram
-    if is_instagram_url(url):
-        try:
-            shortcode = url.split("/")[-2]
-            folder_name = shortcode
-        except IndexError:
-            bot.reply_to(message, "Invalid link")
-            return
-
-        loader_message = bot.send_message(message.chat.id, "Downloading Instagram video...")
-        _download_and_send(message, loader_message, download_instagram_video, url, folder_name)
-        return
-
-    # Unknown platform
-    bot.reply_to(message, "Invalid link")
-
-
-def _download_and_send(message, loader_message, downloader_func, url, download_path):
-    """Helper function to download and send video."""
-    global video_file, folder_name
+    loader_message = bot.send_message(
+        call.message.chat.id,
+        f"Downloading {platform_name} {output_type}..."
+    )
 
     last_status_text = {"value": None}
 
@@ -116,47 +147,42 @@ def _download_and_send(message, loader_message, downloader_func, url, download_p
             status_text = f"{status} {int(percent)}%"
 
         if status_text != last_status_text["value"]:
-            safe_edit_status(message.chat.id, loader_message.message_id, status_text)
+            safe_edit_status(call.message.chat.id, loader_message.message_id, status_text)
             last_status_text["value"] = status_text
 
+    downloaded_video_path = None
     try:
-        video_file = downloader_func(url, download_path, progress_callback=progress_callback)
+        downloaded_video_path = downloader_func(url, download_path, progress_callback=progress_callback)
 
-        if video_file:
-            safe_edit_status(message.chat.id, loader_message.message_id, "Uploading video...")
-            send_video_with_audio_button(message.chat.id, video_file)
-            bot.delete_message(message.chat.id, loader_message.message_id)
+        if downloaded_video_path:
+            if output_type == "video":
+                safe_edit_status(call.message.chat.id, loader_message.message_id, "Uploading video...")
+                send_video(call.message.chat.id, downloaded_video_path)
+            else:
+                safe_edit_status(call.message.chat.id, loader_message.message_id, "Converting to audio...")
+                send_audio(call.message.chat.id, downloaded_video_path)
+
+            bot.delete_message(call.message.chat.id, loader_message.message_id)
         else:
-            bot.delete_message(message.chat.id, loader_message.message_id)
-            bot.reply_to(message, "Video not found")
+            bot.delete_message(call.message.chat.id, loader_message.message_id)
+            bot.send_message(call.message.chat.id, "Video not found")
 
     except Exception as e:
-        bot.delete_message(message.chat.id, loader_message.message_id)
-        bot.reply_to(message, f"Error: {e}")
+        bot.delete_message(call.message.chat.id, loader_message.message_id)
+        bot.send_message(call.message.chat.id, f"Error: {e}")
+    finally:
+        if os.path.exists(download_path):
+            shutil.rmtree(download_path, ignore_errors=True)
 
 
 @bot.callback_query_handler(func=lambda call: True)
 def callback_query(call):
-    global video_file, folder_name
-    if call.data == "get_audio":
-        try:
-            bot.send_message(call.message.chat.id, "Downloading audio...")
+    bot.answer_callback_query(call.id)
 
-            video = VideoFileClip(video_file)
-            audio = video.audio
-            audio_name = f"{uuid.uuid4()}.mp3"
-            audio.write_audiofile(audio_name)
-            video.close()
-
-            with open(audio_name, "rb") as audio_:
-                bot.send_audio(call.message.chat.id, audio_)
-            os.remove(audio_name)
-
-        except Exception as e:
-            bot.reply_to(call.message, f"Error downloading audio: {e}")
-        finally:
-            if os.path.exists(folder_name):
-                shutil.rmtree(folder_name, ignore_errors=True)
+    if call.data == "choose_video":
+        _download_and_send(call, "video")
+    elif call.data == "choose_audio":
+        _download_and_send(call, "audio")
 
 
 bot.infinity_polling()
