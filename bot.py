@@ -9,8 +9,8 @@ from dotenv import load_dotenv
 from downloaders import (
     download_instagram_video,
     is_instagram_url,
-#     download_youtube_video,
-#     is_youtube_url,
+    download_youtube_video,
+    is_youtube_url,
 #     download_pinterest_video,
 #     is_pinterest_url,
 #     download_tiktok_video,
@@ -55,8 +55,8 @@ def send_audio(chat_id, video_path):
 
 
 def get_download_config(url):
-#     if is_youtube_url(url):
-#         return download_youtube_video, f"yt_{uuid.uuid4()}", "YouTube"
+    if is_youtube_url(url):
+        return download_youtube_video, f"yt_{uuid.uuid4()}", "YouTube"
 
 #     if is_pinterest_url(url):
 #         return download_pinterest_video, f"pin_{uuid.uuid4()}", "Pinterest"
