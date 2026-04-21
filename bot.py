@@ -11,8 +11,8 @@ from downloaders import (
     is_instagram_url,
     download_youtube_video,
     is_youtube_url,
-#     download_pinterest_video,
-#     is_pinterest_url,
+    download_pinterest_video,
+    is_pinterest_url,
 #     download_tiktok_video,
 #     is_tiktok_url,
     get_ffmpeg_path,
@@ -58,8 +58,8 @@ def get_download_config(url):
     if is_youtube_url(url):
         return download_youtube_video, f"yt_{uuid.uuid4()}", "YouTube"
 
-#     if is_pinterest_url(url):
-#         return download_pinterest_video, f"pin_{uuid.uuid4()}", "Pinterest"
+    if is_pinterest_url(url):
+        return download_pinterest_video, f"pin_{uuid.uuid4()}", "Pinterest"
 
 #     if is_tiktok_url(url):
 #         return download_tiktok_video, f"tt_{uuid.uuid4()}", "TikTok"
